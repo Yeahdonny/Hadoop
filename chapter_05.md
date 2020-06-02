@@ -206,12 +206,131 @@ Primitive
 </br>
 
 - Writable 인터페이스
+    - 정의
+        - write : 자신의 상태 정보를 DataOutput 바이너리 스트림으로 쓰기 위한 메서드
+            > 객체가 직렬화될 때 호출, 데이터 저장
+        - readFields : DataInput 바이너리 스트림으로부터 상태 정보를 읽기 위한 메서드
+            > 역직렬화될 때 호출, write()에서 저장한 데이터를 읽음
+    
+    - WritableComparable과 비교자
+        - 객체들 간의 비료를 가능하게 해주기 위한 인터페이스
+        - RawComparator 
+            - 자바의 Comparator 확장형
+            - 기능
+                1. 스트림으로부터 비교할 객체를 역직렬화하고 객체의 compare() 메서드를 호출해주는 원시 compare() 메서드의 기본 구현체 제공
+                2. RawComparator 인스턴스(Writable 구현체가 등록된)를 만드는 팩토리처럼 동작
+            - 레코드를 객체로 역직렬화 하지 않고 직접 비교하도록 원시 compare() 메서드 구현 가능
+                > 객체 생성에 수반되는 오버헤드 피할 수 있음
+
+- Writable 클래스
+    - 자바 기본 자료형을 위한 Writable <sup>[5](#footnote_5)</sup>래퍼
+        - char 제외 모든 자바 기본 자료형을 위한 Writable 래퍼 존재
+        - get() : 래핑된 값을 얻기 위한 메서드
+        - set() : 래핑된 값을 저장하기 위한 메서드
+        - 고정길이 포맷(IntWritable, LongWritable)
+            > 값의 전체 공간에서 값이 매우 균일하게 분포되어 있을 때 적합
+        - 가변길이 포맷(VIntWritable, VLongWritable)
+            > 대부분 균일하게 분포되어 있지 않으므로 평균적으로 가변길이 인코딩을 선택하는 것이 저장 공간 절약면에서 좋음  
+
+            > VIntWritable → VLongWritable 변환 가능 (인코딩 동일)   
+            ∴ 처음부터 long형태로 명시적으로 지정할 필요 X
+    - 텍스트
+        - UTF-8 시퀀스를 위한 Writable 구현체
+            > 다른 도구와의 상호운용성 뛰어남
+        - 문자열 인코딩에 다수의 바이트 저장하기 위해 가변길이 <sup>[6](#footnote_6)</sup>인코딩으로 int사용, 최댓값 2GB
+
+        - String과 Text 클래스 차이
+            ||Text|String|
+            |:---:|:---:|:---:|
+            |길이|UTF-8로 인코딩된 바이트 수|char 코드 단위의 개수|
+            |문자열 내 특정 문자열의 index값 리턴|find( ) : 바이트 오프셋 반환|indexOf( ) : char 코드 단위의 인덱스 반환|
+            |charAt( )|유니코드 코드 포인트를 표현하는 int 반환| *주어진 인덱스에 존재하는 char 코드 단위 반환|
+            |codePointAt( )|바이트 오프셋으로 참조 (charAt 메소드가 이와 유사) |char 코드 단위로 int로 표현되는 단일 유니코드 문자 얻기|
+            |가변성|O|X|
+            > *<sup>[7](#footnote_7)</sup>대행 쌍이라면 완전한 유니코드 문자 표현 X
+
+        - 반복
+            - 유니코드 문자 반복시 인덱스를 위해 바이트 오프셋을 사용해야 하므로 매우 복잡
+            - bytesToCodePoint() 정적 메서드
+                > 다음 <sup>[8](#footnote_8)</sup>코드포인트를 int 자료형으로 추출하고 버퍼의 위치 갱신
+        - 가변성
+            - set() 메서드 중 하나를 호출하여 재사용 가능
+        - 스트링으로 변환
+            - toString() 메서드
+    
+    - BytesWritable
+        - 바이너리 데이터의 배열에 대한 래퍼
+        - 직렬화된 포맷은 데이터의 바이트 길이를 지정하는 4바이트 정수 필드에 해당 데이터가 뒤따르는 구조
+        - set() 메서드로 변경 가능 (가변적)
+        - getLength() 크기 결정 가능
 
 
-</br></br></br></br></br></br></br>
+    - NullWritable
+        - 길이가 0인 직렬화
+        - 어떠한 바이트도 읽거나 쓸 수 없음
+        - 위치 표시자로 사용
+        - 불변하는 싱글턴
+        - 얻는 법 : NullWritable.get() 호출
+        - 예시
+            > MapReduce ← 키 또는 값이 사용될 필요가 없을 때 빈 상숫값으로 저장
+            > SequenceFile ← 키로 활용, 키-값 쌍이 아닌 값으로만 구성된 리스트로 저장될 때 사용  
+
+    - ObjectWritable
+        - 자료형의 배열을 위한 범용 래퍼
+        - 하둡 RPC에서 메서드 인자와 반환 타입을 <sup>[9](#footnote_9)</sup>집결(marshal)하고 <sup>[10](#footnote_10)</sup>역집결(unmarshal)하는 데 사용
+        - 어떤 필드가 두 개 이상의 자료형을 가질 때 유용
+        - 직렬화할 때마다 래핑된 자료형의 클래스명을 쓰는 방식은 공간 낭비가 심함
+            > 낭비 줄이고자 GenericWritable 상속받아 제공하는 자료형 명시
+    - GenericWritable
+        - 자료형의 수가 적고 미리 알려진 경우 정적 자료형 배열과 그 자료형에 대한 직렬화된 참조인 배열의 인덱스를 사용하여 공간 낭비 줄임
+
+    - Writable 컬렉션
+        - ArrayWritable과 TwoDArrayWritable
+            - Writable 인스턴스의 배열과 2차원 배열의 Writable 구현체
+            - Writable로 타입이 지정된 경우 정적으로 타입을 설정하기 위해 필요
+            - toArray() : 배열의 복사본을 생성
+            - get(), set()
+        - ArrayPrimitiveWritable
+            - 자바 기본 배열에 대한 래퍼
+            - 자료형을 설정하기 위한 서브클래스 필요 X 
+                > set() 호출할 때 자료형 알 수 있음
+        - MapWritable과 SortedMapWritable
+            - 각 키와 값 필드의 자료형은 해당 필드에 대한 직렬화 포맷의 일부
+            - 타입 배열의 인덱스 값인 단일 바이트 형태로 저장
+            - 커스텀 Writable 타입도 수용 가능
+                > 구현시, 커스텀 타입에 양수 byte 값 사용
+        - EnumSetWritable
+            - 열거 자료형 집합
+        - 집합과 리스트 
+            - Writable 컬렉션 구현이 빠져있음
+            - 일반적인 집합 : NullWritable값과 MapWritable(or SortedMapWritable) 사용
+            - 단일 자료형의 리스트 : ArrayWritable
+            - 다중 자료형의 리스트 : GenericWritable 
+            - 일반적인 ListWritable : MapWritable 아이디어 차용 
+
+<br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/>
+
 ---
 
 <a name="footnote_1">1</a> : 파일의 비트 손상  
+
 <a name="footnote_2">2</a> : primitive, 기본 제공~  
-<a name="footnote_3">3</a> : 기본적으로 binary key/value 쌍을 저장하는 구조를 가지며 압축에 따라 다른 포맷으로 나눌 수 있음  
+
+<a name="footnote_3">3</a> :키와 값의 형태로 데이터를 저장하는 바이너리 파일, 압축에 따라 다른 포맷으로 나눌 수 있음  
+
 <a name="footnote_4">4</a> : 자신에게 연결되어있는 소형 회선들로부터 데이터를 모아 빠르게 전송할 수 있는 대규모 전송회선
+
+<a name="footnote_5">5</a> : 기본 자료형(int나 long)같은 데이터를 객체에 넣기 위해 제공하는 함수
+
+<a name="footnote_6">6</a> : encode = 코드화 = 암호화 // decode = 역코드화 = 복호화
+
+<a name="footnote_7">7</a> : 16비트로 코드 두 개를 사용하여 문자 하나를 표현한 것
+
+<a name="footnote_8">8</a> : 문자에 부여한 고유한 숫자 값
+
+<a name="footnote_9">9</a> : 한 객체의 메모리에서 표현방식을 저장 또는 전송에 적합한 다른 데이터 형식으로 변환하는 과정
+
+<a name="footnote_10">10</a> : 마샬링을 통해 보내진 데이터들을 원래 구조(묶음 풀기)로 복원시키는 과정
+
+> 개체 입출력을 위해 개체를 직렬화(Serialize)하고 복원(역직렬화 Deserialize)하는 과정과 비슷   
+집결(marshaling)과 역집결(unmarshaling)은 단순한 데이터의 직렬화가 아니라, 구조화된 대상들에 대해서 구조 해체/복원이 개입할 때 사용하는 개념이라는 점에서 다름
