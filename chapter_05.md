@@ -308,6 +308,52 @@ Primitive
             - 다중 자료형의 리스트 : GenericWritable 
             - 일반적인 ListWritable : MapWritable 아이디어 차용 
 
+    - 커스텀 Writable 구현하기
+        - Writable은 맵리듀스 데이터 흐름의 중심에 있고, 바이너리 표현을 사용하면 성능을 상당히 높일 수 있음
+        - 커스텀 Writable 작성시 바이너리 표현과 정렬 순서에 대한 완전한 통제 가능
+        - 직접 작성시 `에이브로`와 같은 다른 직렬화 프레임워크 사용하는 것이 더 좋음 
+        - 모든 Writable 구현체는 기본생성자를 가져야 함
+        - Writable 인스턴스는 가변적이고 가끔 재사용되기 때문에 `write()`나 `readFields()` 메서드로 객체를 할당하지 않도록 주의
+        - `hashCode()`, `equals()`, `toString()` 메서드 재정의 필요
+        - RawComparator
+            - 직렬화된 표현만 보고 비교 가능
+        - 커스텀 비교자
+            - RawCompartor로 작성하는것이 좋음
+                > RawComparator 는 기본 비교자에서 정의한 자연 정렬 순서와는 다른 정렬 순서를 구현한 비교자
+    
+    - 직렬화 프레임워크
+        - 모든 타입을 지원하기 위해 플러그인 직렬화 프레임워크 API 제공
+        - 직렬화 프레임워크는 Serialization의 구현체로 표현됨
+        - Serialization 구현체
+            - 타입을 `Serializer` 인스턴스와 `Deserializer` 인스턴스로 매핑하는 방법을 정의
+            - `io.serializations` 속성에 클래스 이름의 목록을 콤마로 분리하여 설정하면 등록 가능
+            - 기본 값 : `org.apache.hadoop.io.serializer.WritableSerialization`과 에이프로의 <sup>[11](#footnote_11)</sup>`구체적 매핑`과 <sup>[12](#footnote_12)</sup>`리프렉트 매핑` 직렬화
+                > Wriatable 또는 에이브로 객체만 직렬화하거나 역직렬화 할 수 있음을 의미
+        - JavaSerialization
+            - 간결성, 고속화, 확장성, 상호운용성 만족 X → 사용 X
+        - 직렬화 IDL
+            - 언어를 중립적이고 선언적 방식으로 타입을 정의 → 상호운용성 좋음
+            - 타입을 쉽게 확장하고 발전시킬 수 있는 버전화 스키마도 일반적으로 정의
+            - Apache Thrift, Google Protocol Buffers 직렬화 프레임워크
+                > 영속적인 바이너리 데이터를 위한 포맷으로 활용
+            - 맵리듀스 포맷은 RPC와 데이터 교환용으로 하둡 내부에서 일부 활용
+            - 에이브로
+                > 하둡에 저장된 대규모 데이터 처리에 적합한 IDL 기반의 직렬화 프레임워크
+        
+- 파일 기반 데이터 구조
+    
+      맵리듀스 기반의 데이터 처리를 위해 바이너리 데이터의 각 블랍을 한 파일에 담아두는 것은 확장성에 좋지않아 하둡은 다양한 고수준 컨테이너 개발
+
+    - SequenceFile
+        - 바이너리 key-value 쌍에 대한 영속적인 데이터 구조 제공
+        - 작은 파일을 위한 컨테이너로도 잘 작동 → 파일을 SequenceFile로 포장하여 작은 파일을 저장하고 처리하는게 효율적
+            > HDFS와 맵리듀스는 커다란 파일에 최적화
+        - SequenceFile 만들기
+            - 쓰기를 위한 스트림(`FSDataOutputStream` 또는 `FileSystem`과 `Path` 쌍), `Configuration` 객체, 키와 값의 타입 명시 필수
+            - 옵션 : 압축 타입과 코덱, Progressable 콜백(쓰기 진행 상황 보고), Metadata 인트턴스
+            - key-value 타입은 Serialization으로 직렬화, 역직렬화 될 수 있다면 뭐든 사용 가능
+        - SequenceFile 읽기
+
 <br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/>
 
 ---
@@ -334,3 +380,7 @@ Primitive
 
 > 개체 입출력을 위해 개체를 직렬화(Serialize)하고 복원(역직렬화 Deserialize)하는 과정과 비슷   
 집결(marshaling)과 역집결(unmarshaling)은 단순한 데이터의 직렬화가 아니라, 구조화된 대상들에 대해서 구조 해체/복원이 개입할 때 사용하는 개념이라는 점에서 다름
+
+<a name="footnote_11">11</a> : 코드 생성
+
+<a name="footnote_12">12</a> : 에이브로 자료형을 기존의 자바 자료형으로 매핑
