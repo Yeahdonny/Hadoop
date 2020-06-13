@@ -354,6 +354,130 @@ Primitive
             - key-value 타입은 Serialization으로 직렬화, 역직렬화 될 수 있다면 뭐든 사용 가능
         - SequenceFile 읽기
 
+- 파일 기반 데이터 구조
+
+    맵리듀스 기반의 데이터 처리를 위해 바이너리 데이터의 각 블랍을 한 파일에 담아두는 것은 확장성에 좋지않아 하둡은 다양한 고수준 컨테이너 개발
+    
+    - SequenceFile
+        - 바이너리 key-value 쌍에 대한 영속적인 데이터 구조 제공
+        - 작은 파일을 위한 컨테이너로도 잘 작동 → 파일을 SequenceFile로 포장하여 작은 파일을 저장하고 처리하는게 효율적
+            > HDFS와 맵리듀스는 커다란 파일에 최적화
+
+        - SequenceFile 만들기
+            - 쓰기를 위한 스트림(FSDataOutputStream 또는 FileSystem과 Path 쌍), Configuration 객체, 키와 값의 타입 명시 필수
+            - 옵션 : 압축 타입과 코덱, Progressable 콜백(쓰기 진행 상황 보고), Metadata 인트턴스
+            - key-value 타입은 Serialization으로 직렬화, 역직렬화 될 수 있다면 뭐든 사용 가능
+        - SequenceFile 읽기     
+            - `SequenceFile.Reader`의 인스턴스 생성 후 `next()` 반복 호출
+            - 다른 직렬화 프레임워크 (Apache Thrift)
+                - ```java
+                    public Object next(Object key) throws IOException
+                    public Object getCurrentValue(Object val) throws IOException
+                    ```
+                    > `next()` 로 읽어 들인 key-value 값이 `null`이 아닌 객체면 `getCurrentValue()` 메서드로 얻을 수 있음  
+                    `null`인 경우 파일의 끝에 도달했음을 의미 
+            - `Writable`
+                -  ```java
+                    public boolean next(Writable key, Writable val)
+                    ```
+                    > 스트림의 다음 key-value 값을 읽음  
+                    값이 읽혔다면 `true`, 파일 끝에 도달하면 `false` 반환
+                - `getKeyClass()`와 `getValueClass()` 호출하여 `SequenceFile.Reader`에서 해당 타입 찾고 `reflectionUtils`가 key-value에 대한 인스턴스 생성
+                - 동기화 포인트
+                    - 레크드의 경계를 재동기화하는데 사용될 수 있는 스트림의 한 지점
+                    - `Sequencefile.Writer` 순차 파일이 쓰여질 때 몇 개의 레코드 단위로 기록
+                    - 항상 레코드 경계에 맞춰짐
+                    > ** 주의  
+                    `SequenceFile.Writer`의 `sync()`메서드 : 스트림의 현재 위치에 동기화 포인트 추가  
+                    `Syncable`인터페이스의 `hsync()`메서드 : 기존 장치에 버퍼 동기화
+            - 지정된 위치 탐색
+                1. `seek()`
+                    - 파일의 지정된 위치에 리더를 위치시킴
+                    - 파일의 위치가 레코드 경계에 있지 않다면 리더의 `next()` 메서드 호출될 때 실패할 것
+                2. 동기화 포인트 사용
+                    - `SequenceFile.Reader`의 `sync (long position)` 메서드는 position 이후의 다음번 동기화 포인트로 해당 리더를 위치시킴 (이 위치 다음에 파일의 동기화 포인트가 없다면 리더는 파일의 끝으로 이동)
+                    - 스트림의 어떤 위치든 `sync()` 호출 가능
+        - 명령행 인터페이스로 SequenceFile 출력하기
+            - hadoop fs 명령은 순차 파일을 텍스트 형식으로 출력하기 위해 `-text` 옵션 제공
+                - 파일 타입 검출
+                - 텍스트로 적절히 변환하기 위해 파일의 <sup>[13](#footnote_13)</sup>매직넘버를 먼저 조사
+                - gzip으로 압축된 파일, 순차 파일, 에이브로 데이터 파일 인식 그 밖의 입력은 일반 텍스트로 가정
+                - 순차 파일의 key-value 값이 의미 있는 문자열(`toString()`로 정의된) 일 때 제대로 동작
+                - 사용자가 직접 만든 key-value 클래스 사용시 하둡의 클래스 경로에서 해당 클래스를 찾을 수 있어야 함
+        - SequenceFile 정렬하고 병합하기
+            - 맵리듀스 사용 권장
+            - `SequenceFile.Sorter` 클래스의 `sort()` 및 `merge()` 메서드는 저수준의 함수
+                > 병렬성을 얻기 위해서는 직접 데이터를 파티션해야 함
+        - SequenceFile 포맷
+            - 단일 헤더와 하나 이상의 레코드로 구성
+            - 처음 세 바이트는 매직넘버에 해당하는 `SEQ 바이트`, 그 뒤 한 바이트는 `버전 넘버`
+            - 헤더에 포함된 필드
+                - key-value 클래스의 이름
+                - 압축 세부사항
+                - 사용자 정의 메타데이터
+                - 동기화 표시자
+                    > 각 파일에 임의의 값을 가진 동기화 표시자 有 이 값은 헤더에 저장
+
+                    > 순차파일의 레코드 사이에 나타남
+                    
+                    > 모든 레코드 쌍에 동기화 표시자 사용 X (작은 레코드의 경우)
+            - 레코드 내부 포맷
+                - 비압축(default)
+                    - 각 레코드 구성 : 레코드 길이(바이트 단위), 키 길이, key, value
+                        > 길이 필드 : 4 byte 정수로 기록  
+                        > key, value : Serialization을 사용하여 직렬화
+                - 레코드 압축 포맷
+                    - 헤더에 정의된 코덱을 사용하의 value의 byte를 압축
+                - 블록 압축
+                    - 구성 : 그 블록의 레코드 수를 가리키는 필드, 이어지는 네 개의 압축된 필드(키의 길이, key, 값의 길이, value)
+                    - 다수의 레코드 한 번에 압축
+                    - 압축 밀도가 높고 레코드간 유사성을 이용할 기회를 얻을 수 있기에 레코드 압축보다 더 선호됨
+                    - `io.seqfile.compress.blocksize` 속성에서 정의한 최소 크기에 이를 때까지 바이트 단위로 하나의 블록에 추가
+                    - 동기화 표시자는 각 블록의 앞부분에 기록됨
+
+    - MapFile
+        - 키를 기준으로 검색을 지원하는 색인을 포함한 정렬된 SequenceFile
+        - 색인 자체도 맵 내부에 키의 단편을 포함하고 있는 일종의 SequenceFile
+        - 정렬된 키 순으로 된 맵 항목을 포함한 별도의 SequenceFile을 이용한 색인을 메모리에 로드하는 방식 사용 ← 빠른 검색 지원
+        - `MapFile.Writer` 이용시 매 항목이 순서에 따라 반드시 추가되어야 함
+        - MapFile의 변형
+            - SetFile
+                - Writable 키의 집합 저장
+                - 키는 정렬된 순으로 추가
+            - ArrayFile
+                - 키는 배열에서 각 항목의 인덱스를 표현하는 정수
+                - 값은 Writable
+            - BloomMapFile
+                - 빠른 `get()` 메서드 지원
+                - 데이터가 드문드문 분포된 파일에 적합
+                - 원하는 키가 어느 맵에 있는지 검증할 때 다이내믹 블룸 필터 사용
+                - 검증 작업은 메모리에서 처리되어 매우 빠르나 <sup>[14](#footnote_14)</sup>긍정 오류의 가능성 有
+                - 검증 통과시 기본 `get()` 메서드 호출
+    
+    - 기타 파일 포맷과 컬럼 기반 파일 포맷
+        - 행 기반 파일 포맷
+            - SequenceFile, MapFile, AvroDataFile
+                > **AvroDataFile  
+                <sup>[15](#footnote_15)</sup>이기종 프로그래밍 언어에도 이식 가능  
+                객체 그 자체의 스키마에 의해 기술됨  
+                바이너리 포맷으로 많이 권장
+            - 각 행의 값은 파일에서 연속된 위치에 저장되어 있음
+            - 소수의 컬럼만 필요하더라도 전체 행을 메모리에 불러들여야 함
+                > 지연 역직렬화 이용시 처리시간은 단축되나 디스크의 모든 행 읽어야 함
+            - 단일 행에서 많은 컬럼을 접근할 때 적합
+        - 컬럼 기반 파일 포맷
+            - 각 파일이 먼저 행 기준의 여러 조각으로 분리되고, 각 조각은 컬럼 기준으로 저장됨
+                > 각 행의 첫 번째 컬럼의 값이 먼저 저장되고, 각 행의 두 번째 컬럼의 값이 그다음 순으로 저장
+            - 소수의 컬럼 접근할 때 적합
+            - 메모리에 있는 데이터를 각 행으로 분리하는 버퍼 추가로 필요하기에 많은 메모리 필요
+            - 쓰기 도중 `flush` 또는 `sync` 제어 불가능
+            - 쓰기 처리 실패시 현재 파일 복구 불가 → 스트리밍 쓰기에 부적합
+                > 행 기반 파일 포맷은 마지막 동기화 포인트까지 데이터 읽기 가능
+            - 하이브의 RCFile, ORCFile, 파케이, 에이브로의 트레브니 
+                
+
+
+
 <br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/>
 
 ---
@@ -384,3 +508,9 @@ Primitive
 <a name="footnote_11">11</a> : 코드 생성
 
 <a name="footnote_12">12</a> : 에이브로 자료형을 기존의 자바 자료형으로 매핑
+
+<a namespace="footnote_13">13</a> : 각 파일의 형식마다 정해져있는 특정 바이트로 파일에 포함되는 몇개의 Bytes들 (=파일 시그니처), 파일 포맷 분석, 악성코드 분석, 파일 복구 등에 중요하게 작용  
+
+<a namespace="footnote_14">14</a> : 정상적인 접근을 비정상적인 접근이라 잘못 판단 
+  
+<a namespace="footnote_15">15</a> : Heterogeneous 여러 다른 종류들로 이뤄진
